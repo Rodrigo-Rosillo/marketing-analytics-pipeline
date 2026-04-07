@@ -1,0 +1,161 @@
+version: 2
+
+models:
+  - name: stg_meta_ads
+    description: >
+      Staged Meta (Facebook/Instagram) ad performance data.
+      Cleaned, typed, and enriched with derived metrics.
+    columns:
+      - name: surrogate_key
+        description: Surrogate key generated from date + ad_set_id.
+        tests:
+          - unique
+          - not_null
+      - name: date
+        description: Calendar date of the ad performance record.
+        tests:
+          - not_null
+      - name: channel
+        description: Ad platform identifier (meta).
+      - name: campaign_id
+        description: Unique campaign identifier.
+        tests:
+          - not_null
+      - name: campaign_name
+        description: Human-readable campaign name.
+      - name: objective
+        description: "Campaign objective: awareness, traffic, or conversion."
+      - name: ad_set_id
+        description: Unique ad set identifier within a campaign.
+        tests:
+          - not_null
+      - name: ad_set_name
+        description: Human-readable ad set name.
+      - name: impressions
+        description: Number of times the ad was displayed.
+      - name: clicks
+        description: Number of clicks on the ad.
+      - name: spend
+        description: Total spend in the ad's currency.
+      - name: conversions
+        description: Number of attributed conversions.
+      - name: conversion_value
+        description: Total revenue from attributed conversions.
+      - name: cpc
+        description: Actual cost per click.
+      - name: currency
+        description: Currency code (e.g. USD).
+      - name: click_through_rate
+        description: "Derived: clicks / impressions."
+      - name: cost_per_conversion
+        description: "Derived: spend / conversions."
+      - name: roas
+        description: "Derived: conversion_value / spend (return on ad spend)."
+      - name: _loaded_at
+        description: Timestamp when the row was loaded into the RAW table.
+
+  - name: stg_google_ads
+    description: >
+      Staged Google Ads performance data.
+      Cleaned, typed, and enriched with derived metrics.
+    columns:
+      - name: surrogate_key
+        description: Surrogate key generated from date + ad_set_id.
+        tests:
+          - unique
+          - not_null
+      - name: date
+        description: Calendar date of the ad performance record.
+        tests:
+          - not_null
+      - name: channel
+        description: Ad platform identifier (google_ads).
+      - name: campaign_id
+        description: Unique campaign identifier.
+        tests:
+          - not_null
+      - name: campaign_name
+        description: Human-readable campaign name.
+      - name: objective
+        description: "Campaign objective: awareness, traffic, or conversion."
+      - name: ad_set_id
+        description: Unique ad set identifier within a campaign.
+        tests:
+          - not_null
+      - name: ad_set_name
+        description: Human-readable ad set name.
+      - name: impressions
+        description: Number of times the ad was displayed.
+      - name: clicks
+        description: Number of clicks on the ad.
+      - name: spend
+        description: Total spend in the ad's currency.
+      - name: conversions
+        description: Number of attributed conversions.
+      - name: conversion_value
+        description: Total revenue from attributed conversions.
+      - name: cpc
+        description: Actual cost per click.
+      - name: currency
+        description: Currency code (e.g. USD).
+      - name: click_through_rate
+        description: "Derived: clicks / impressions."
+      - name: cost_per_conversion
+        description: "Derived: spend / conversions."
+      - name: roas
+        description: "Derived: conversion_value / spend (return on ad spend)."
+      - name: _loaded_at
+        description: Timestamp when the row was loaded into the RAW table.
+
+  - name: stg_tiktok_ads
+    description: >
+      Staged TikTok Ads performance data.
+      Cleaned, typed, and enriched with derived metrics.
+    columns:
+      - name: surrogate_key
+        description: Surrogate key generated from date + ad_set_id.
+        tests:
+          - unique
+          - not_null
+      - name: date
+        description: Calendar date of the ad performance record.
+        tests:
+          - not_null
+      - name: channel
+        description: Ad platform identifier (tiktok).
+      - name: campaign_id
+        description: Unique campaign identifier.
+        tests:
+          - not_null
+      - name: campaign_name
+        description: Human-readable campaign name.
+      - name: objective
+        description: "Campaign objective: awareness, traffic, or conversion."
+      - name: ad_set_id
+        description: Unique ad set identifier within a campaign.
+        tests:
+          - not_null
+      - name: ad_set_name
+        description: Human-readable ad set name.
+      - name: impressions
+        description: Number of times the ad was displayed.
+      - name: clicks
+        description: Number of clicks on the ad.
+      - name: spend
+        description: Total spend in the ad's currency.
+      - name: conversions
+        description: Number of attributed conversions.
+      - name: conversion_value
+        description: Total revenue from attributed conversions.
+      - name: cpc
+        description: Actual cost per click.
+      - name: currency
+        description: Currency code (e.g. USD).
+      - name: click_through_rate
+        description: "Derived: clicks / impressions."
+      - name: cost_per_conversion
+        description: "Derived: spend / conversions."
+      - name: roas
+        description: "Derived: conversion_value / spend (return on ad spend)."
+      - name: _loaded_at
+        description: Timestamp when the row was loaded into the RAW table.

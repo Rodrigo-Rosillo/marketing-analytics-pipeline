@@ -1,0 +1,38 @@
+version: 2
+
+sources:
+  - name: raw
+    database: MARKETING_ANALYTICS
+    schema: RAW
+    description: Bronze layer — raw CSV data loaded as-is from ad platforms.
+
+    tables:
+      - name: META_ADS
+        description: Raw Meta (Facebook/Instagram) ad performance data.
+        columns:
+          - name: date
+            tests:
+              - not_null
+          - name: ad_set_id
+            tests:
+              - not_null
+
+      - name: GOOGLE_ADS
+        description: Raw Google Ads performance data.
+        columns:
+          - name: date
+            tests:
+              - not_null
+          - name: ad_set_id
+            tests:
+              - not_null
+
+      - name: TIKTOK_ADS
+        description: Raw TikTok Ads performance data.
+        columns:
+          - name: date
+            tests:
+              - not_null
+          - name: ad_set_id
+            tests:
+              - not_null
