@@ -1,0 +1,74 @@
+name: Deploy — dbt run + docs
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+  SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+  SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+  SNOWFLAKE_ROLE: MARKETING_PIPELINE_ROLE
+  SNOWFLAKE_DATABASE: MARKETING_ANALYTICS
+  SNOWFLAKE_WAREHOUSE: MARKETING_WH
+
+jobs:
+  dbt-deploy:
+    name: dbt run, test & docs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dbt
+        run: pip install dbt-snowflake dbt-expectations
+
+      - name: Install dbt packages
+        working-directory: dbt
+        run: dbt deps
+
+      - name: dbt run (staging + marts)
+        working-directory: dbt
+        run: dbt run --select staging marts
+
+      - name: dbt test (all)
+        working-directory: dbt
+        run: dbt test
+
+      - name: dbt docs generate
+        working-directory: dbt
+        run: dbt docs generate
+
+      - name: Upload docs to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dbt/target
+
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    needs: dbt-deploy
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

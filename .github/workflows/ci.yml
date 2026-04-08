@@ -1,0 +1,42 @@
+name: CI — dbt compile + test
+
+on:
+  pull_request:
+    branches: [main]
+
+env:
+  SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+  SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+  SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+  SNOWFLAKE_ROLE: MARKETING_PIPELINE_ROLE
+  SNOWFLAKE_DATABASE: MARKETING_ANALYTICS
+  SNOWFLAKE_WAREHOUSE: MARKETING_WH
+
+jobs:
+  dbt-ci:
+    name: dbt compile & test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dbt
+        run: pip install dbt-snowflake dbt-expectations
+
+      - name: Install dbt packages
+        working-directory: dbt
+        run: dbt deps
+
+      - name: dbt compile
+        working-directory: dbt
+        run: dbt compile
+
+      - name: dbt test (staging)
+        working-directory: dbt
+        run: dbt test --select staging

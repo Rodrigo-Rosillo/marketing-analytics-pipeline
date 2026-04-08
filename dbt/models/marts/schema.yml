@@ -1,0 +1,161 @@
+version: 2
+
+models:
+  - name: fct_ad_spend
+    description: >
+      Unified fact table of all ad spend across Meta, Google, and TikTok.
+      One row per date per ad set. Rows with zero impressions are excluded.
+    columns:
+      - name: surrogate_key
+        description: Surrogate key (date + ad_set_id).
+        tests:
+          - unique
+          - not_null
+      - name: date
+        description: Calendar date of the ad performance record.
+        tests:
+          - not_null
+      - name: channel
+        description: Ad platform (meta, google_ads, tiktok).
+        tests:
+          - not_null
+      - name: campaign_id
+        description: Unique campaign identifier.
+        tests:
+          - not_null
+      - name: campaign_name
+        description: Human-readable campaign name.
+      - name: objective
+        description: "Campaign objective: awareness, traffic, or conversion."
+      - name: ad_set_id
+        description: Unique ad set identifier.
+        tests:
+          - not_null
+      - name: ad_set_name
+        description: Human-readable ad set name.
+      - name: impressions
+        description: Number of times the ad was displayed.
+      - name: clicks
+        description: Number of clicks on the ad.
+      - name: spend
+        description: Total spend in USD.
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 10000
+      - name: conversions
+        description: Number of attributed conversions.
+      - name: conversion_value
+        description: Total revenue from attributed conversions.
+      - name: click_through_rate
+        description: "Derived: clicks / impressions."
+      - name: cost_per_conversion
+        description: "Derived: spend / conversions (null when conversions = 0)."
+      - name: roas
+        description: "Derived: conversion_value / spend (return on ad spend)."
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 200
+
+  - name: fct_channel_daily
+    description: >
+      Daily aggregated ad performance metrics by channel.
+      One row per date per channel.
+    columns:
+      - name: surrogate_key
+        description: Surrogate key (date + channel).
+        tests:
+          - unique
+          - not_null
+      - name: date
+        description: Calendar date.
+        tests:
+          - not_null
+      - name: channel
+        description: Ad platform (meta, google_ads, tiktok).
+        tests:
+          - not_null
+      - name: total_impressions
+        description: Sum of impressions across all campaigns for this channel and date.
+      - name: total_clicks
+        description: Sum of clicks.
+      - name: total_spend
+        description: Sum of spend in USD.
+      - name: total_conversions
+        description: Sum of conversions.
+      - name: total_conversion_value
+        description: Sum of conversion value (revenue).
+      - name: avg_ctr
+        description: Weighted average click-through rate.
+      - name: avg_cpa
+        description: Weighted average cost per acquisition.
+      - name: avg_roas
+        description: Weighted average return on ad spend.
+
+  - name: fct_campaign_summary
+    description: >
+      Lifetime aggregated performance metrics by campaign.
+      One row per channel + campaign.
+    columns:
+      - name: surrogate_key
+        description: Surrogate key (channel + campaign_id).
+        tests:
+          - unique
+          - not_null
+      - name: channel
+        description: Ad platform.
+        tests:
+          - not_null
+      - name: campaign_id
+        description: Unique campaign identifier.
+        tests:
+          - not_null
+      - name: campaign_name
+        description: Human-readable campaign name.
+      - name: objective
+        description: Campaign objective.
+      - name: total_days_active
+        description: Number of distinct dates with recorded ad spend.
+      - name: total_impressions
+        description: Lifetime impressions.
+      - name: total_clicks
+        description: Lifetime clicks.
+      - name: total_spend
+        description: Lifetime spend in USD.
+      - name: total_conversions
+        description: Lifetime conversions.
+      - name: total_conversion_value
+        description: Lifetime conversion value (revenue).
+      - name: avg_ctr
+        description: Weighted average click-through rate.
+      - name: avg_cpa
+        description: Weighted average cost per acquisition.
+      - name: avg_roas
+        description: Weighted average return on ad spend.
+
+  - name: dim_campaigns
+    description: >
+      Campaign dimension table. One row per unique campaign across all channels.
+    columns:
+      - name: surrogate_key
+        description: Surrogate key (channel + campaign_id).
+        tests:
+          - unique
+          - not_null
+      - name: channel
+        description: Ad platform.
+        tests:
+          - not_null
+      - name: campaign_id
+        description: Unique campaign identifier.
+        tests:
+          - not_null
+      - name: campaign_name
+        description: Human-readable campaign name.
+        tests:
+          - not_null
+      - name: objective
+        description: "Campaign objective: awareness, traffic, or conversion."
+        tests:
+          - not_null

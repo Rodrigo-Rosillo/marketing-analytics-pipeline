@@ -19,3 +19,6 @@ models:
     staging:
       +materialized: view
       +schema: STAGING
+    marts:
+      +materialized: table
+      +schema: MARTS
