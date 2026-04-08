@@ -36,7 +36,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dbt
-        run: pip install dbt-snowflake dbt-expectations
+        run: pip install dbt-snowflake
 
       - name: Install dbt packages
         working-directory: dbt
