@@ -1,0 +1,11 @@
+# Core pipeline dependencies
+python-dotenv>=1.0.0
+
+# Warehouse engines
+duckdb>=1.0.0                 # local / CI engine (default)
+dbt-core>=1.10,<1.12
+dbt-duckdb>=1.10,<1.11        # dbt adapter for the default dev target
+
+# Production warehouse (only needed when running --target snowflake / prod)
+snowflake-connector-python>=3.0.0
+dbt-snowflake>=1.10,<1.12

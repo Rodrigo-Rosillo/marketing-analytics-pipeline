@@ -1,7 +1,22 @@
 marketing_analytics:
-  target: dev
+  # DuckDB (dev) is the default so local dev + CI run for free with no secrets.
+  # Override with DBT_TARGET=prod (or `dbt run --target prod`) to deploy to Snowflake.
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
   outputs:
+
+    # ── Local / CI engine: DuckDB ────────────────────────────────────────────
     dev:
+      type: duckdb
+      # File lives at the repo root; dbt runs from ./dbt, hence the ../ prefix.
+      # The DuckDB catalog name is derived from the file stem, so naming the file
+      # MARKETING_ANALYTICS.duckdb makes the source `database: MARKETING_ANALYTICS`
+      # resolve identically on both engines.
+      path: "{{ env_var('DUCKDB_PATH', '../MARKETING_ANALYTICS.duckdb') }}"
+      schema: RAW
+      threads: 4
+
+    # ── Production engine: Snowflake ─────────────────────────────────────────
+    prod:
       type: snowflake
       account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
       user: "{{ env_var('SNOWFLAKE_USER') }}"

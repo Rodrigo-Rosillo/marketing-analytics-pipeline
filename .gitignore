@@ -22,3 +22,7 @@ Thumbs.db
 target/
 dbt_packages/
 logs/
+
+# DuckDB local warehouse (rebuilt from CSVs via ingestion/load_to_warehouse.py)
+*.duckdb
+*.duckdb.wal
