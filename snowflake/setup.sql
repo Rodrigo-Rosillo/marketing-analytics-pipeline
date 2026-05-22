@@ -122,3 +122,34 @@ CREATE TABLE IF NOT EXISTS TIKTOK_ADS (
     currency          VARCHAR(5),
     _loaded_at        TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
 );
+
+-- Unstructured customer feedback. All VARCHAR by design — Bronze stores the
+-- messy source as-is; parsing happens in the Silver layer. Enriched by the LLM.
+CREATE TABLE IF NOT EXISTS CUSTOMER_FEEDBACK (
+    feedback_id       VARCHAR(20),
+    posted_at         VARCHAR(50),
+    source            VARCHAR(50),
+    rating            VARCHAR(20),
+    review_text       VARCHAR(2000),
+    author            VARCHAR(100),
+    true_campaign_id  VARCHAR(20),
+    _loaded_at        TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+-- LLM enrichment output (written by enrichment/enrich_feedback.py via Gemini).
+-- JSON arrays (themes / mentions) are stored as strings and parsed in Silver.
+CREATE TABLE IF NOT EXISTS FEEDBACK_ENRICHED (
+    feedback_id           VARCHAR(20),
+    sentiment             VARCHAR(20),
+    sentiment_confidence  FLOAT,
+    themes                VARCHAR(500),
+    product_mentions      VARCHAR(1000),
+    competitor_mentions   VARCHAR(1000),
+    language              VARCHAR(10),
+    campaign_reference    VARCHAR(200),
+    resolved_campaign_id  VARCHAR(20),
+    resolution_confidence FLOAT,
+    model_version         VARCHAR(50),
+    content_hash          VARCHAR(64),
+    _enriched_at          TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);

@@ -36,3 +36,21 @@ sources:
           - name: ad_set_id
             tests:
               - not_null
+
+      - name: CUSTOMER_FEEDBACK
+        description: >
+          Raw, unstructured customer feedback (reviews / social comments) loaded
+          as-is. Deliberately messy — dirty dates, inconsistent source labels,
+          mixed-format ratings, multilingual free text. Enriched by the LLM layer
+          downstream. `true_campaign_id` is a synthetic ground-truth label used
+          only to measure resolution accuracy; the enrichment step never reads it.
+        columns:
+          - name: feedback_id
+            description: Unique identifier for each feedback record.
+            tests:
+              - not_null
+              - unique
+          - name: review_text
+            description: The free-text comment — the only field guaranteed present.
+            tests:
+              - not_null

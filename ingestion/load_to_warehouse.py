@@ -7,6 +7,11 @@ The two engines share one medallion model; only the load mechanics differ:
   - DuckDB:    read_csv_auto into a local file database (no account, no secrets)
   - Snowflake: PUT + COPY INTO via the snowflake connector
 
+Datasets are described once in DATASETS and loaded the same way on both engines.
+Bronze keeps everything as-loaded; the customer feedback columns are all VARCHAR
+because the source is intentionally messy (dirty dates, mixed-format ratings) and
+parsing belongs in the Silver layer, not Bronze.
+
 Usage:
     python ingestion/load_to_warehouse.py                       # DuckDB, append
     python ingestion/load_to_warehouse.py --truncate            # DuckDB, reload
@@ -16,6 +21,7 @@ Usage:
 import argparse
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,33 +29,24 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# ── Dataset registry ────────────────────────────────────────────────────────--
 
-# Maps each CSV filename to its target RAW table.
-CSV_TABLE_MAP: dict[str, str] = {
-    "meta_ads_2024.csv":   "META_ADS",
-    "google_ads_2024.csv": "GOOGLE_ADS",
-    "tiktok_ads_2024.csv": "TIKTOK_ADS",
-}
+@dataclass(frozen=True)
+class Dataset:
+    csv: str                 # source file in data/raw/
+    table: str               # target RAW table
+    columns: list[str]       # CSV columns (excludes the _loaded_at audit column)
+    duckdb_cols_ddl: str     # column definitions for DuckDB CREATE TABLE
+    all_varchar: bool = False  # force every CSV column to VARCHAR (messy sources)
 
-# Columns present in the CSVs (everything except the _loaded_at audit column,
-# which each engine fills with a DEFAULT on insert).
-CSV_COLUMNS = [
+
+_AD_COLUMNS = [
     "date", "channel", "campaign_id", "campaign_name", "objective",
     "ad_set_id", "ad_set_name", "impressions", "clicks", "spend",
     "conversions", "conversion_value", "cpc", "currency",
 ]
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data" / "raw"
-DEFAULT_DUCKDB_PATH = PROJECT_ROOT / "MARKETING_ANALYTICS.duckdb"
-
-
-# ── DuckDB backend ──────────────────────────────────────────────────────────--
-
-# DuckDB DDL for the RAW tables — mirrors snowflake/setup.sql, with DuckDB types.
-DUCKDB_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS RAW.{table} (
+_AD_DDL = """
     date              DATE,
     channel           VARCHAR,
     campaign_id       VARCHAR,
@@ -63,13 +60,39 @@ CREATE TABLE IF NOT EXISTS RAW.{table} (
     conversions       INTEGER,
     conversion_value  DECIMAL(12,2),
     cpc               DECIMAL(10,4),
-    currency          VARCHAR,
-    _loaded_at        TIMESTAMP DEFAULT current_timestamp
-)
+    currency          VARCHAR
 """
 
+DATASETS: list[Dataset] = [
+    Dataset("meta_ads_2024.csv",   "META_ADS",   _AD_COLUMNS, _AD_DDL),
+    Dataset("google_ads_2024.csv", "GOOGLE_ADS", _AD_COLUMNS, _AD_DDL),
+    Dataset("tiktok_ads_2024.csv", "TIKTOK_ADS", _AD_COLUMNS, _AD_DDL),
+    # Bronze keeps the messy feedback exactly as-loaded — all VARCHAR.
+    Dataset(
+        "customer_feedback_2024.csv", "CUSTOMER_FEEDBACK",
+        ["feedback_id", "posted_at", "source", "rating",
+         "review_text", "author", "true_campaign_id"],
+        """
+    feedback_id       VARCHAR,
+    posted_at         VARCHAR,
+    source            VARCHAR,
+    rating            VARCHAR,
+    review_text       VARCHAR,
+    author            VARCHAR,
+    true_campaign_id  VARCHAR
+""",
+        all_varchar=True,
+    ),
+]
 
-def load_duckdb(truncate: bool) -> None:
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = PROJECT_ROOT / "data" / "raw"
+DEFAULT_DUCKDB_PATH = PROJECT_ROOT / "MARKETING_ANALYTICS.duckdb"
+
+
+# ── DuckDB backend ──────────────────────────────────────────────────────────--
+
+def load_duckdb(datasets: list[Dataset], truncate: bool) -> None:
     import duckdb
 
     db_path = Path(os.environ.get("DUCKDB_PATH", str(DEFAULT_DUCKDB_PATH)))
@@ -77,28 +100,29 @@ def load_duckdb(truncate: bool) -> None:
     con = duckdb.connect(str(db_path))
     try:
         con.execute("CREATE SCHEMA IF NOT EXISTS RAW")
+        for ds in datasets:
+            csv_path = DATA_DIR / ds.csv
+            cols = ", ".join(ds.columns)
+            print(f"Loading {ds.csv} -> RAW.{ds.table}")
 
-        cols = ", ".join(CSV_COLUMNS)
-        for csv_file, table in CSV_TABLE_MAP.items():
-            csv_path = DATA_DIR / csv_file
-            print(f"Loading {csv_file} -> RAW.{table}")
-
-            con.execute(DUCKDB_TABLE_DDL.format(table=table))
-            if truncate:
-                print(f"  Truncating RAW.{table}...")
-                con.execute(f"DELETE FROM RAW.{table}")
-
-            # read_csv_auto matches columns by header name; we select the known
-            # column list explicitly so _loaded_at falls back to its DEFAULT.
             con.execute(
-                f"""
-                INSERT INTO RAW.{table} ({cols})
-                SELECT {cols}
-                FROM read_csv_auto('{csv_path.as_posix()}', header = true)
-                """
+                f"CREATE TABLE IF NOT EXISTS RAW.{ds.table} ("
+                f"{ds.duckdb_cols_ddl}, _loaded_at TIMESTAMP DEFAULT current_timestamp)"
             )
-            count = con.execute(f"SELECT count(*) FROM RAW.{table}").fetchone()[0]
-            print(f"  OK RAW.{table}: {count:,} rows total\n")
+            if truncate:
+                print(f"  Truncating RAW.{ds.table}...")
+                con.execute(f"DELETE FROM RAW.{ds.table}")
+
+            # read_csv_auto matches by header name; we select the known column
+            # list explicitly so _loaded_at falls back to its DEFAULT.
+            varchar_opt = ", all_varchar = true" if ds.all_varchar else ""
+            con.execute(
+                f"INSERT INTO RAW.{ds.table} ({cols}) "
+                f"SELECT {cols} FROM read_csv_auto('{csv_path.as_posix()}', "
+                f"header = true{varchar_opt})"
+            )
+            count = con.execute(f"SELECT count(*) FROM RAW.{ds.table}").fetchone()[0]
+            print(f"  OK RAW.{ds.table}: {count:,} rows total\n")
 
         print("All files loaded successfully.\n")
     finally:
@@ -107,7 +131,7 @@ def load_duckdb(truncate: bool) -> None:
 
 # ── Snowflake backend ─────────────────────────────────────────────────────────
 
-def load_snowflake(truncate: bool) -> None:
+def load_snowflake(datasets: list[Dataset], truncate: bool) -> None:
     import snowflake.connector
 
     required = ["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_PASSWORD"]
@@ -127,22 +151,22 @@ def load_snowflake(truncate: bool) -> None:
         role=os.environ.get("SNOWFLAKE_ROLE", "MARKETING_PIPELINE_ROLE"),
     )
     cursor = conn.cursor()
-    cols = ", ".join(CSV_COLUMNS)
     try:
-        for csv_file, table in CSV_TABLE_MAP.items():
-            csv_path = DATA_DIR / csv_file
-            stage = f"@%{table}"
-            print(f"Loading {csv_file} -> {table}")
+        for ds in datasets:
+            csv_path = DATA_DIR / ds.csv
+            stage = f"@%{ds.table}"
+            cols = ", ".join(ds.columns)
+            print(f"Loading {ds.csv} -> {ds.table}")
 
             if truncate:
-                print(f"  Truncating {table}...")
-                cursor.execute(f"TRUNCATE TABLE IF EXISTS {table}")
+                print(f"  Truncating {ds.table}...")
+                cursor.execute(f"TRUNCATE TABLE IF EXISTS {ds.table}")
 
             cursor.execute(f"REMOVE {stage}")
             cursor.execute(f"PUT 'file://{csv_path.as_posix()}' {stage} AUTO_COMPRESS=TRUE")
             cursor.execute(
                 f"""
-                COPY INTO {table} ({cols})
+                COPY INTO {ds.table} ({cols})
                 FROM {stage}
                 FILE_FORMAT = (
                     TYPE            = 'CSV'
@@ -156,7 +180,7 @@ def load_snowflake(truncate: bool) -> None:
                 """
             )
             for row in cursor.fetchall():
-                print(f"  OK {table}: {row[3]} rows loaded from {row[0]}")
+                print(f"  OK {ds.table}: {row[3]} rows loaded from {row[0]}")
             cursor.execute(f"REMOVE {stage}")
             print()
         print("All files loaded successfully.\n")
@@ -182,16 +206,15 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    for csv_file in CSV_TABLE_MAP:
-        path = DATA_DIR / csv_file
-        if not path.exists():
-            print(f"ERROR: Expected CSV not found: {path}")
+    for ds in DATASETS:
+        if not (DATA_DIR / ds.csv).exists():
+            print(f"ERROR: Expected CSV not found: {DATA_DIR / ds.csv}")
             sys.exit(1)
 
     if args.target == "duckdb":
-        load_duckdb(truncate=args.truncate)
+        load_duckdb(DATASETS, truncate=args.truncate)
     else:
-        load_snowflake(truncate=args.truncate)
+        load_snowflake(DATASETS, truncate=args.truncate)
 
 
 if __name__ == "__main__":
