@@ -1,6 +1,8 @@
 # Data Flow
 
-End-to-end data lineage for the marketing analytics pipeline. Sources flow through Bronze (raw), Silver (staging), and Gold (marts) layers in Snowflake before landing in Power BI.
+End-to-end lineage. Two sources — structured ad data and unstructured customer
+feedback — flow through Bronze → Silver → Gold. Feedback is LLM-enriched between
+Bronze and Silver. The warehouse is DuckDB locally and in CI, Snowflake in prod.
 
 ## Pipeline Overview
 
@@ -8,94 +10,86 @@ End-to-end data lineage for the marketing analytics pipeline. Sources flow throu
 flowchart TD
     %% ── Sources ──────────────────────────────────────────────
     subgraph SRC["Data Sources"]
-        META_API[Meta Ads API]
-        GOOGLE_API[Google Ads API]
-        TIKTOK_API[TikTok Ads API]
+        ADS[Meta / Google / TikTok<br/>ad platforms]
+        FBSRC[Customer feedback<br/>reviews · social comments]
     end
 
-    %% ── Simulation ──────────────────────────────────────────
-    SIM["simulate_ad_data.py<br/>generates synthetic CSVs"]
+    SIM_ADS["simulate_ad_data.py"]
+    SIM_FB["simulate_feedback_data.py<br/>messy free text"]
 
-    %% ── Local CSV files ─────────────────────────────────────
-    subgraph CSV["data/raw/ (CSV files)"]
-        META_CSV["meta_ads_2024.csv<br/>2,928 rows"]
-        GOOGLE_CSV["google_ads_2024.csv<br/>2,562 rows"]
-        TIKTOK_CSV["tiktok_ads_2024.csv<br/>1,830 rows"]
+    subgraph CSV["data/raw/ (CSV)"]
+        ADS_CSV["*_ads_2024.csv"]
+        FB_CSV["customer_feedback_2024.csv"]
     end
 
-    %% ── Loader ──────────────────────────────────────────────
-    LOAD["load_to_snowflake.py<br/>PUT + COPY INTO"]
+    LOAD["load_to_warehouse.py<br/>DuckDB (default) / Snowflake"]
+    ENRICH["enrich_feedback.py<br/>Gemini · structured output<br/>cache + offline fixture"]
 
     %% ── Bronze ──────────────────────────────────────────────
-    subgraph BRONZE["Snowflake — BRONZE (RAW schema)"]
-        RAW_META[(RAW.META_ADS)]
-        RAW_GOOGLE[(RAW.GOOGLE_ADS)]
-        RAW_TIKTOK[(RAW.TIKTOK_ADS)]
+    subgraph BRONZE["BRONZE — RAW schema"]
+        RAW_ADS[(RAW.META/GOOGLE/TIKTOK_ADS)]
+        RAW_FB[(RAW.CUSTOMER_FEEDBACK<br/>all VARCHAR, raw)]
+        RAW_ENR[(RAW.FEEDBACK_ENRICHED<br/>sentiment · themes · entities<br/>resolved_campaign_id)]
     end
 
     %% ── Silver ──────────────────────────────────────────────
-    subgraph SILVER["Snowflake — SILVER (STAGING schema, dbt views)"]
-        STG_META[/stg_meta_ads/]
-        STG_GOOGLE[/stg_google_ads/]
-        STG_TIKTOK[/stg_tiktok_ads/]
+    subgraph SILVER["SILVER — STAGING (dbt views)"]
+        STG_ADS[/stg_meta/google/tiktok_ads/]
+        STG_FB[/stg_customer_feedback/]
+        STG_ENR[/stg_feedback_enriched/]
     end
 
     %% ── Gold ────────────────────────────────────────────────
-    subgraph GOLD["Snowflake — GOLD (MARTS schema, dbt tables)"]
-        FCT_AD[(fct_ad_spend<br/>grain: date + ad_set)]
-        FCT_CHAN[(fct_channel_daily<br/>grain: date + channel)]
-        FCT_CAMP[(fct_campaign_summary<br/>grain: campaign)]
-        DIM_CAMP[(dim_campaigns<br/>grain: campaign)]
+    subgraph GOLD["GOLD — MARTS (dbt tables)"]
+        FCT_AD[(fct_ad_spend)]
+        FCT_CHAN[(fct_channel_daily)]
+        FCT_CAMP[(fct_campaign_summary)]
+        DIM_CAMP[(dim_campaigns)]
+        FCT_FB[(fct_feedback<br/>incremental)]
+        FCT_THEME[(fct_feedback_themes)]
+        FCT_PERF[(fct_campaign_performance<br/>spend + sentiment)]
     end
 
-    %% ── BI ──────────────────────────────────────────────────
-    PBI["Power BI Dashboard<br/>marketing_analytics_dashboard.pbix<br/>3 pages: Executive · Channel · Campaign"]
+    SNAP[["feedback_enrichment_snapshot<br/>SCD2 on model_version"]]
+    PBI["Power BI<br/>(via Parquet exports)"]
 
     %% ── Edges ──────────────────────────────────────────────
-    META_API -.real source.-> SIM
-    GOOGLE_API -.real source.-> SIM
-    TIKTOK_API -.real source.-> SIM
+    ADS --> SIM_ADS --> ADS_CSV --> LOAD --> RAW_ADS
+    FBSRC --> SIM_FB --> FB_CSV --> LOAD --> RAW_FB
+    RAW_FB --> ENRICH --> RAW_ENR
+    RAW_ADS --> STG_ADS
+    RAW_FB --> STG_FB
+    RAW_ENR --> STG_ENR
+    RAW_ENR --> SNAP
 
-    SIM --> META_CSV
-    SIM --> GOOGLE_CSV
-    SIM --> TIKTOK_CSV
-
-    META_CSV --> LOAD
-    GOOGLE_CSV --> LOAD
-    TIKTOK_CSV --> LOAD
-
-    LOAD --> RAW_META
-    LOAD --> RAW_GOOGLE
-    LOAD --> RAW_TIKTOK
-
-    RAW_META --> STG_META
-    RAW_GOOGLE --> STG_GOOGLE
-    RAW_TIKTOK --> STG_TIKTOK
-
-    STG_META --> FCT_AD
-    STG_GOOGLE --> FCT_AD
-    STG_TIKTOK --> FCT_AD
-
+    STG_ADS --> FCT_AD
     FCT_AD --> FCT_CHAN
     FCT_AD --> FCT_CAMP
     FCT_AD --> DIM_CAMP
+    STG_ENR --> FCT_FB
+    STG_FB --> FCT_FB
+    STG_ENR --> FCT_THEME
+    FCT_FB --> FCT_PERF
+    FCT_CAMP --> FCT_PERF
 
     FCT_AD --> PBI
     FCT_CHAN --> PBI
-    FCT_CAMP --> PBI
-    DIM_CAMP --> PBI
+    FCT_PERF --> PBI
+    FCT_THEME --> PBI
 
     %% ── Styling ─────────────────────────────────────────────
     classDef bronze fill:#cd7f32,stroke:#5a3a17,color:#fff
     classDef silver fill:#c0c0c0,stroke:#555,color:#000
     classDef gold fill:#ffd700,stroke:#7a5c00,color:#000
     classDef python fill:#306998,stroke:#1a3a5e,color:#fff
+    classDef llm fill:#8e44ad,stroke:#4a235a,color:#fff
     classDef bi fill:#f2c811,stroke:#8a6f00,color:#000
 
-    class RAW_META,RAW_GOOGLE,RAW_TIKTOK bronze
-    class STG_META,STG_GOOGLE,STG_TIKTOK silver
-    class FCT_AD,FCT_CHAN,FCT_CAMP,DIM_CAMP gold
-    class SIM,LOAD python
+    class RAW_ADS,RAW_FB,RAW_ENR bronze
+    class STG_ADS,STG_FB,STG_ENR silver
+    class FCT_AD,FCT_CHAN,FCT_CAMP,DIM_CAMP,FCT_FB,FCT_THEME,FCT_PERF,SNAP gold
+    class SIM_ADS,SIM_FB,LOAD python
+    class ENRICH llm
     class PBI bi
 ```
 
@@ -103,48 +97,55 @@ flowchart TD
 
 | Layer | Tool | What happens | Materialization |
 |---|---|---|---|
-| Source | Python | `simulate_ad_data.py` writes 3 CSVs to `data/raw/` | CSV files |
-| Ingestion | Python + snowflake-connector | `load_to_snowflake.py` runs `PUT` then `COPY INTO`, sets `_loaded_at` audit column | — |
-| Bronze | Snowflake | Raw rows mirrored as-is from CSV, no transforms | Tables |
-| Silver | dbt | Type casts, filters `impressions = 0`, derives `click_through_rate`, `cost_per_conversion`, `roas`, generates `surrogate_key` from `date + ad_set_id` | Views |
-| Gold | dbt | `fct_ad_spend` unions all three staging models; `fct_channel_daily`, `fct_campaign_summary`, `dim_campaigns` aggregate from `fct_ad_spend` | Tables |
-| BI | Power BI | Reads Gold tables via Snowflake connector | .pbix file |
+| Source | Python | Simulate ad CSVs + messy feedback CSV | CSV files |
+| Ingestion | Python | `load_to_warehouse.py` loads Bronze (DuckDB or Snowflake) | Tables |
+| Enrichment | Python + Gemini | `enrich_feedback.py` produces structured fields; cached to a fixture | RAW.FEEDBACK_ENRICHED |
+| Bronze | warehouse | Raw rows as-loaded; feedback all-VARCHAR | Tables |
+| Silver | dbt | Cast/derive ad metrics; normalize feedback channel/date/rating; type enrichment | Views |
+| Gold | dbt | Ad marts; `fct_feedback` (incremental); themes bridge; `fct_campaign_performance` joins spend to sentiment | Tables |
+| Snapshot | dbt | SCD2 history of enrichment, keyed on `model_version` | Table |
+| BI | Power BI | Reads Gold via Parquet exports | .pbix |
 
-## Orchestration Flow (Airflow DAG)
-
-The [marketing_pipeline_dag.py](airflow/dags/marketing_pipeline_dag.py) DAG runs daily at 06:00 UTC.
+## Orchestration (Airflow DAG)
 
 ```mermaid
 flowchart LR
-    A[simulate_data<br/>PythonOperator] --> B[load_to_snowflake<br/>PythonOperator]
-    B --> C["dbt_run<br/>BashOperator<br/>dbt run --select staging marts"]
-    C --> D[dbt_test<br/>BashOperator<br/>43 tests]
-    D --> E[notify_success<br/>PythonOperator]
+    A[simulate_ads] --> C[load_to_warehouse]
+    B[simulate_feedback] --> C
+    C --> D["enrich_feedback<br/>--offline (fixture)"]
+    D --> E["dbt_build<br/>models + snapshot + tests"]
+    E --> F[notify_success]
 
     classDef task fill:#017cee,stroke:#003d75,color:#fff
-    class A,B,C,D,E task
+    class A,B,C,D,E,F task
 ```
 
-## CI/CD Flow (GitHub Actions)
+## CI/CD (GitHub Actions)
 
 ```mermaid
 flowchart LR
-    PR[Pull Request] --> CI["ci.yml<br/>dbt compile<br/>dbt test --select staging"]
+    PR[Pull Request] --> CI["ci.yml — full pipeline on DuckDB<br/>generate → load → enrich (offline) → dbt build"]
     CI -->|pass| MERGE[Merge to main]
     CI -->|fail| BLOCK[PR blocked]
 
-    MERGE --> DEPLOY["deploy.yml<br/>dbt run<br/>dbt test<br/>dbt docs generate"]
-    DEPLOY --> PAGES[GitHub Pages<br/>dbt docs site]
+    MERGE --> DEPLOY["deploy.yml<br/>build on DuckDB + dbt docs generate"]
+    DEPLOY --> PAGES[GitHub Pages]
+
+    DISP["live-enrichment.yml<br/>(manual)"] -->|Gemini API| FIX[refresh fixture artifact]
 
     classDef pass fill:#2ea44f,stroke:#1a6e30,color:#fff
     classDef fail fill:#cf222e,stroke:#8a0d18,color:#fff
+    classDef manual fill:#8e44ad,stroke:#4a235a,color:#fff
     class MERGE,DEPLOY,PAGES pass
     class BLOCK fail
+    class DISP,FIX manual
 ```
 
 ## Data Quality Gates
 
-- **Source-level** — `not_null` tests on RAW columns via `sources.yml`
-- **Staging** — `unique` + `not_null` on `surrogate_key`; `not_null` on `date`, `channel`, `campaign_id`, `ad_set_id`
-- **Marts** — `dbt_expectations.expect_column_values_to_be_between` on `spend` (0–10,000) and `roas` (0–50) in `fct_ad_spend`
-- **CI** — staging tests must pass before any PR can merge to `main`
+- **Source-level** — `not_null` on RAW columns; `unique` feedback_id
+- **Staging** — surrogate-key `unique`/`not_null`; `accepted_values` on normalized channel
+- **Enrichment (LLM output)** — `accepted_values` (sentiment, themes), confidence in
+  [0,1], `relationships` resolved_campaign_id → dim_campaigns, and a singular test
+  failing the build if resolution precision < 80% vs. ground truth
+- **CI** — the full pipeline + all tests must pass on DuckDB before any PR merges

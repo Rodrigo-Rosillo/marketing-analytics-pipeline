@@ -1,0 +1,65 @@
+version: 2
+
+models:
+  - name: fct_feedback
+    description: One enriched, analyzable row per feedback item (incremental).
+    columns:
+      - name: feedback_id
+        tests: [not_null, unique]
+      - name: sentiment
+        tests:
+          - accepted_values:
+              values: ['positive', 'negative', 'neutral', 'mixed']
+      - name: source_channel
+        tests:
+          - accepted_values:
+              values: ['meta', 'google_ads', 'tiktok', 'other']
+      - name: sentiment_score
+        tests:
+          - accepted_values:
+              values: [-1, 0, 1]
+      - name: resolved_campaign_id
+        description: LLM-resolved campaign — referential integrity to the dimension.
+        tests:
+          - relationships:
+              to: ref('dim_campaigns')
+              field: campaign_id
+      - name: resolution_confidence
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 1
+
+  - name: fct_feedback_themes
+    description: Bridge — one row per (feedback, theme); themes constrained to taxonomy.
+    columns:
+      - name: surrogate_key
+        tests: [not_null, unique]
+      - name: theme
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['shipping', 'price', 'product_quality', 'customer_service',
+                       'sizing_fit', 'website_app', 'returns', 'other']
+      - name: feedback_id
+        tests:
+          - relationships:
+              to: ref('fct_feedback')
+              field: feedback_id
+
+  - name: fct_campaign_performance
+    description: Per-campaign paid-media metrics joined to LLM sentiment signal.
+    columns:
+      - name: campaign_id
+        tests:
+          - not_null
+          - unique
+          - relationships:
+              to: ref('dim_campaigns')
+              field: campaign_id
+      - name: net_sentiment_score
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: -1
+              max_value: 1
+              row_condition: "net_sentiment_score is not null"

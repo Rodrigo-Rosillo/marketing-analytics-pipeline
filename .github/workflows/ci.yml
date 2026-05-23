@@ -1,20 +1,17 @@
-name: CI — dbt compile + test
+name: CI — full pipeline (DuckDB)
+
+# Runs the entire pipeline end to end on DuckDB with NO secrets and NO network:
+# generate data -> load -> LLM-enrich from the committed fixture (offline) ->
+# dbt build (all models, snapshot, and data-quality tests). Because enrichment
+# replays the fixture, the non-deterministic LLM step is fully reproducible here.
 
 on:
   pull_request:
     branches: [main]
 
-env:
-  SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
-  SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
-  SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
-  SNOWFLAKE_ROLE: MARKETING_PIPELINE_ROLE
-  SNOWFLAKE_DATABASE: MARKETING_ANALYTICS
-  SNOWFLAKE_WAREHOUSE: MARKETING_WH
-
 jobs:
-  dbt-ci:
-    name: dbt compile & test
+  pipeline:
+    name: build & test on DuckDB
     runs-on: ubuntu-latest
 
     steps:
@@ -26,17 +23,24 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dbt
-        run: pip install dbt-snowflake
+      - name: Install dependencies
+        run: pip install dbt-duckdb duckdb python-dotenv pydantic
+
+      - name: Generate synthetic data
+        run: |
+          python ingestion/simulate_ad_data.py
+          python ingestion/simulate_feedback_data.py
+
+      - name: Load Bronze (DuckDB)
+        run: python ingestion/load_to_warehouse.py --truncate
+
+      - name: Enrich feedback (offline — replay fixture, no API key)
+        run: python enrichment/enrich_feedback.py --offline
 
       - name: Install dbt packages
         working-directory: dbt
         run: dbt deps
 
-      - name: dbt compile
+      - name: dbt build (all models, snapshot, tests)
         working-directory: dbt
-        run: dbt compile
-
-      - name: dbt test (staging)
-        working-directory: dbt
-        run: dbt test --select staging
+        run: dbt build --profiles-dir . --target dev

@@ -54,3 +54,18 @@ sources:
             description: The free-text comment — the only field guaranteed present.
             tests:
               - not_null
+
+      - name: FEEDBACK_ENRICHED
+        description: >
+          LLM enrichment output written by enrichment/enrich_feedback.py (Gemini).
+          Structured fields derived from review_text; JSON arrays (themes / mentions)
+          stored as strings and parsed in Silver. model_version stamps which model
+          produced each row (drives the enrichment snapshot).
+        columns:
+          - name: feedback_id
+            tests:
+              - not_null
+              - unique
+              - relationships:
+                  to: source('raw', 'CUSTOMER_FEEDBACK')
+                  field: feedback_id

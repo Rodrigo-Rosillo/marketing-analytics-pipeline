@@ -26,3 +26,6 @@ logs/
 # DuckDB local warehouse (rebuilt from CSVs via ingestion/load_to_warehouse.py)
 *.duckdb
 *.duckdb.wal
+
+# Power BI Parquet exports (regenerated via dashboard/export_marts.py)
+dashboard/exports/

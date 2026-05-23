@@ -1,12 +1,21 @@
-# Marketing Analytics Pipeline
+# LLM-Enriched Marketing Analytics Pipeline
 
-Multi-channel ad performance pipeline — Meta, Google Ads, TikTok data loaded into Snowflake, modeled with dbt, orchestrated with Airflow, tested end-to-end with 43 automated data quality checks.
+Multi-channel ad performance **and LLM-enriched customer feedback** in one
+warehouse. Meta / Google / TikTok ad data plus messy, unstructured reviews flow
+through a medallion (Bronze → Silver → Gold) model in dbt, with the feedback
+enriched by an LLM (Google Gemini) — sentiment, themes, entity extraction, and
+free-text-to-campaign resolution — then tested end to end and orchestrated.
+
+Runs on **DuckDB** locally and in CI (free, no secrets), and deploys to
+**Snowflake** in production — warehouse-portable by design.
 
 ---
 
 ## Dashboard
 
-Three-page Power BI report built on the Gold layer. Slicers for date range, channel, and campaign filter all pages.
+Power BI report built on the Gold layer, served via Parquet exports
+([dashboard/README.md](dashboard/README.md)). Slicers for date range, channel, and
+campaign filter all pages, plus a Voice-of-Customer page on the enriched feedback.
 
 ### Executive Summary
 ![Executive Summary](dashboard/screenshots/page1_executive_summary.png)
@@ -24,40 +33,44 @@ Three-page Power BI report built on the Gold layer. Slicers for date range, chan
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Data Sources                                │
-│         Meta Ads · Google Ads · TikTok Ads (CSV / API)              │
-└───────────────────────────┬─────────────────────────────────────────┘
-                            │  Python  (ingestion/load_to_snowflake.py)
-                            │  PUT + COPY INTO
-                            ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Snowflake — BRONZE (RAW)                        │
-│           RAW.META_ADS · RAW.GOOGLE_ADS · RAW.TIKTOK_ADS           │
-│                  Raw rows, no transforms, _loaded_at audit          │
-└───────────────────────────┬─────────────────────────────────────────┘
-                            │  dbt staging models
-                            ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Snowflake — SILVER (STAGING)                    │
-│       stg_meta_ads · stg_google_ads · stg_tiktok_ads (views)       │
-│         Typed columns, derived CTR / CPA / ROAS, nulls filtered     │
-└───────────────────────────┬─────────────────────────────────────────┘
-                            │  dbt mart models
-                            ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                      Snowflake — GOLD (MARTS)                       │
-│   fct_ad_spend · fct_channel_daily · fct_campaign_summary          │
-│   dim_campaigns (tables)                                            │
-└───────────────────────────┬─────────────────────────────────────────┘
-                            │
-                            ▼
-                     Power BI Dashboard
+┌──────────────────────────────┐     ┌──────────────────────────────────┐
+│  Ad platforms (CSV / API)    │     │  Customer feedback (reviews,      │
+│  Meta · Google · TikTok      │     │  social comments) — messy text    │
+└──────────────┬───────────────┘     └──────────────┬───────────────────┘
+               │ load_to_warehouse.py                │
+               ▼                                      ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  BRONZE (RAW)  — raw rows, untouched                                      │
+│  RAW.META_ADS · GOOGLE_ADS · TIKTOK_ADS · CUSTOMER_FEEDBACK               │
+└──────────────┬──────────────────────────────────┬────────────────────────┘
+               │                                   │  enrich_feedback.py (Gemini)
+               │                                   ▼
+               │                  ┌──────────────────────────────────────────┐
+               │                  │  RAW.FEEDBACK_ENRICHED                    │
+               │                  │  sentiment · themes · entities · language │
+               │                  │  · resolved_campaign_id · confidence      │
+               │                  └──────────────────┬───────────────────────┘
+               ▼                                      ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  SILVER (STAGING, dbt views) — typed, cleaned, derived metrics            │
+│  stg_*_ads · stg_customer_feedback · stg_feedback_enriched                │
+└──────────────────────────────────┬────────────────────────────────────────┘
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  GOLD (MARTS, dbt tables)                                                 │
+│  fct_ad_spend · fct_channel_daily · fct_campaign_summary · dim_campaigns  │
+│  fct_feedback (incremental) · fct_feedback_themes · fct_campaign_performance│
+│                          + feedback_enrichment_snapshot (SCD2)            │
+└──────────────────────────────────┬────────────────────────────────────────┘
+                                    ▼
+                          Power BI (via Parquet)
 ```
 
-**Orchestration:** Airflow DAG runs daily at 06:00 UTC — simulate → load → dbt run → dbt test → notify.
+**Engines:** DuckDB (default — local + CI, no secrets) · Snowflake (`--target prod`).
 
-**CI/CD:** GitHub Actions runs `dbt compile` + `dbt test --select staging` on every PR. Merges to `main` trigger a full `dbt run`, `dbt test`, and docs deploy to GitHub Pages.
+**Orchestration:** Airflow DAG — simulate ads + feedback → load → enrich (offline) → `dbt build` → notify.
+
+**CI/CD:** every PR runs the **entire pipeline on DuckDB with no secrets** (generate → load → offline enrich → full `dbt build` + tests). Merges to `main` rebuild and publish dbt docs to GitHub Pages.
 
 ---
 
@@ -65,138 +78,168 @@ Three-page Power BI report built on the Gold layer. Slicers for date range, chan
 
 | Layer | Tool | Purpose |
 |---|---|---|
-| Ingestion | Python + snowflake-connector-python | Bulk-load CSVs via PUT + COPY INTO |
-| Warehouse | Snowflake (X-Small) | Cloud-native storage and compute |
-| Transformation | dbt Core + dbt_utils + dbt_expectations | Typed models, surrogate keys, data quality tests |
-| Orchestration | Apache Airflow | Daily DAG with retries and dependency management |
-| CI/CD | GitHub Actions | PR validation and docs deployment to GitHub Pages |
-| BI | Power BI | Three-page report on Gold layer |
+| Ingestion | Python | Load CSVs into Bronze (DuckDB `read_csv_auto` / Snowflake `COPY INTO`) |
+| LLM enrichment | Google Gemini (`google-genai`) + Pydantic | Structured enrichment of unstructured feedback |
+| Warehouse (dev/CI) | DuckDB + dbt-duckdb | Free, file-based, zero-secret CI |
+| Warehouse (prod) | Snowflake + dbt-snowflake | Cloud deploy target |
+| Transformation | dbt Core + dbt_utils + dbt_expectations | Typed models, snapshots, data-quality tests |
+| Orchestration | Apache Airflow | Daily DAG with retries |
+| CI/CD | GitHub Actions | Full keyless pipeline on PRs; docs to Pages |
+| BI | Power BI | Report on the Gold layer (Parquet) |
+
+---
+
+## LLM Enrichment
+
+[`enrichment/enrich_feedback.py`](enrichment/enrich_feedback.py) turns messy free-text
+feedback into structured fields using Gemini with **enforced JSON output** (a Pydantic
+schema), not free-form text:
+
+- **sentiment** + confidence (classification)
+- **themes** from a controlled taxonomy (multi-label classification / normalization)
+- **product / competitor mentions** (entity extraction)
+- **language** (detection)
+- **resolved_campaign_id** + confidence — maps an oblique reference like *"your summer
+  sale ad"* to a canonical campaign (entity resolution)
+
+**Engineered for a constrained free tier and reproducible CI:**
+
+- **Content-hash cache + committed fixture** — every enrichment is written to
+  `enrichment/fixtures/feedback_enrichment.jsonl`. `--offline` replays it with **no API
+  key**, so CI and the daily DAG are deterministic and cost nothing.
+- **Per-batch checkpointing + graceful daily-quota stop** — survives the free tier's
+  ~20-requests/day cap and resumes.
+- **Validation layer** rejects out-of-vocabulary labels and hallucinated campaign IDs.
+- **`model_version` stamped on every row**, feeding an SCD2 snapshot.
+
+**Resolution quality vs. held-out ground-truth labels:** **84.5% exact match,
+90% precision, 100% specificity** (never invents a campaign when none is referenced),
+0 hallucinated IDs.
 
 ---
 
 ## Data Model
 
-### Bronze — `RAW` schema
+### Bronze — `RAW`
+Raw rows, no transforms. Three ad tables (shared schema) plus `CUSTOMER_FEEDBACK`
+(all VARCHAR — the messy source is stored as-is) and `FEEDBACK_ENRICHED` (LLM output).
 
-Raw tables loaded as-is from source CSVs. No transformations. All three tables share the same schema:
+### Silver — `STAGING` (views)
+`stg_*_ads` cast/derive CTR, CPA, ROAS. `stg_customer_feedback` normalizes ~20
+inconsistent source labels to a channel, parses 7 date formats, and extracts numeric
+ratings. `stg_feedback_enriched` types the LLM output.
 
-| Column | Type | Description |
+### Gold — `MARTS` (tables)
+
+| Model | Grain | Description |
 |---|---|---|
-| date | VARCHAR | Ad performance date |
-| channel | VARCHAR | Source channel (meta / google_ads / tiktok) |
-| campaign_id | VARCHAR | Platform campaign identifier |
-| campaign_name | VARCHAR | Human-readable campaign name |
-| objective | VARCHAR | awareness / traffic / conversion |
-| ad_set_id | VARCHAR | Ad set / ad group identifier |
-| ad_set_name | VARCHAR | Human-readable ad set name |
-| impressions | NUMBER | Total impressions served |
-| clicks | NUMBER | Total clicks |
-| spend | FLOAT | Total spend in USD |
-| conversions | NUMBER | Total conversions |
-| conversion_value | FLOAT | Revenue attributed to conversions |
-| cpc | FLOAT | Cost per click |
-| currency | VARCHAR | Always USD |
-| _loaded_at | TIMESTAMP | Audit column — set by Snowflake on load |
+| `fct_ad_spend` | date + ad set | Union of all staging ad models |
+| `fct_channel_daily` | date + channel | Daily channel aggregates |
+| `fct_campaign_summary` | campaign | Lifetime campaign metrics |
+| `dim_campaigns` | campaign | Campaign dimension |
+| `fct_feedback` | feedback item | **Incremental** — enriched, analyzable feedback |
+| `fct_feedback_themes` | feedback × theme | Bridge (unnested themes) |
+| `fct_campaign_performance` | campaign | **Spend + ROAS joined to sentiment** |
 
-### Silver — `STAGING` schema
-
-Three views (`stg_meta_ads`, `stg_google_ads`, `stg_tiktok_ads`) that clean, cast, and enrich the raw tables. Added columns:
-
-- `surrogate_key` — SHA-256 hash of `date + ad_set_id` via `dbt_utils.generate_surrogate_key`
-- `click_through_rate` — `ROUND(clicks / NULLIF(impressions, 0), 6)`
-- `cost_per_conversion` — `ROUND(spend / NULLIF(conversions, 0), 4)`
-- `roas` — `ROUND(conversion_value / NULLIF(spend, 0), 4)`
-
-Rows with `impressions = 0` are filtered at this layer.
-
-### Gold — `MARTS` schema
-
-| Model | Grain | Rows | Description |
-|---|---|---|---|
-| `fct_ad_spend` | date + ad_set | 7,320 | Union of all three staging models — one row per ad set per day |
-| `fct_channel_daily` | date + channel | 1,098 | Daily aggregates by channel with total spend, ROAS, CTR, CPA |
-| `fct_campaign_summary` | campaign | 9 | Lifetime campaign metrics plus total days active |
-| `dim_campaigns` | campaign | 9 | Campaign dimension — channel, objective, names |
+**Snapshot:** `feedback_enrichment_snapshot` (SCD2 on `model_version`) captures how
+enrichment changes when the model or prompt changes.
 
 ---
 
 ## Data Quality
 
-43 dbt tests run on every deployment:
+Tests run on every `dbt build` and block merges if they fail:
 
-- `unique` and `not_null` on all surrogate keys and foreign keys across staging and mart models
-- `not_null` on date, channel, campaign_id, ad_set_id
-- `dbt_expectations.expect_column_values_to_be_between` on `spend` (0–10,000) and `roas` (0–50) in `fct_ad_spend`
-- Source-level `not_null` tests on `RAW` tables via `sources.yml`
-
-The CI workflow blocks merges if any test fails.
+- `unique` / `not_null` on surrogate and foreign keys across all layers
+- Source-level `not_null` on RAW tables
+- `dbt_expectations` range checks on `spend`, `roas`
+- **On the non-deterministic LLM output:** `accepted_values` (sentiment, themes,
+  channel), `relationships` from `resolved_campaign_id` → `dim_campaigns`, confidence
+  bounds [0,1], and a **singular test that fails the build if resolution precision
+  drops below 80%** vs. the ground-truth label.
 
 ---
 
 ## Design Decisions
 
-**Snowflake over SQL Server.** I used SQL Server professionally for three years. It works well for operational workloads but requires managing server infrastructure and storage yourself. Snowflake separates storage from compute — the warehouse suspends when idle, so a pipeline that runs once daily costs almost nothing outside that daily window. That matters when you want a portfolio project running for months without a surprise bill. The native integration with dbt and Power BI also avoids the ODBC driver management that SQL Server connections on cloud BI tools usually require.
+**DuckDB for dev/CI, Snowflake for prod.** My Snowflake trial expired, so I made DuckDB
+the default engine and kept Snowflake as a documented `prod` target. The whole medallion
+ports with no SQL changes, and CI now runs the *entire* pipeline for free with no
+secrets — a more capable setup than the original Snowflake-only CI, which could only
+`compile` and test staging. Developing on a local engine and deploying to a cloud
+warehouse is a real, increasingly common pattern.
 
-**dbt for transformations.** The alternative is raw SQL in stored procedures or Python jobs. Those work, but there is no built-in way to test them, no column-level documentation, and no lineage graph. With dbt, every model has a `schema.yml` file that documents each column and defines tests — the docs site generated from this project is published to GitHub Pages on every merge. The tests also made it safe to refactor the staging models when the schema changed: any breakage shows up immediately.
+**LLM enrichment upstream of dbt.** The Gemini call is non-deterministic and
+rate-limited, so it lives *before* the transformation layer, writing a structured RAW
+table. dbt then treats it like any other source — fully reproducible and free to
+re-run. The committed fixture makes the non-deterministic step replayable in CI.
 
-**Medallion architecture.** The Bronze/Silver/Gold split is not decorative. Bronze tables are never modified after load — if a Silver model has a bug, I can fix it without touching raw data. Silver is only for casting and derived metrics that are mathematically unambiguous (CTR is always clicks/impressions). Business definitions — what counts as a "conversion" for a campaign summary vs. a daily rollup — live in the Gold mart models where they are visible and testable. Without this separation, business logic tends to accumulate in dashboards where nobody can see or test it.
+**Fixtures over live API in automation.** The free tier allows ~20 requests/day, so the
+daily DAG and CI replay a committed fixture offline; only one manual workflow ever
+spends quota. This keeps automation deterministic and zero-cost.
 
-**GitHub Actions for CI/CD.** Every pull request runs `dbt compile` to catch SQL syntax errors before they hit Snowflake, then runs `dbt test --select staging` against the actual data. If a test fails, the PR cannot merge. This catches problems at the review stage rather than generating a Slack alert after something already broke in production.
+**dbt for transformations.** Built-in testing, column-level docs, and a lineage graph.
+The tests made it safe to bolt a whole new source and LLM layer onto the existing
+models — any breakage shows up immediately.
+
+**Medallion architecture.** Bronze is never modified after load; Silver is unambiguous
+casting/cleaning; business logic lives in Gold where it's visible and testable. The
+messy feedback proves the point — all parsing happens in Silver, Bronze stays raw.
 
 ---
 
 ## How to Run Locally
 
 ### Prerequisites
-
 - Python 3.11+
-- A Snowflake account (free 30-day trial at trial.snowflake.com)
-- Git
+- (Optional) a Google AI Studio API key for *live* enrichment — not needed to run the
+  pipeline, which replays the committed fixture.
 
 ### Setup
 
 ```bash
-# 1. Clone the repo
 git clone https://github.com/Rodrigo-Rosillo/marketing-analytics-pipeline.git
 cd marketing-analytics-pipeline
+pip install -r requirements.txt
+```
 
-# 2. Install Python dependencies
-pip install snowflake-connector-python python-dotenv dbt-snowflake
+### Run the pipeline (DuckDB, no secrets)
 
-# 3. Configure credentials
-cp .env.example .env
-# Edit .env with your Snowflake account details
-
-# 4. Run Snowflake setup (once)
-# Paste snowflake/setup.sql into a Snowsight worksheet and run as ACCOUNTADMIN
-# Change the MARKETING_PIPELINE_USER password before running
-
-# 5. Generate synthetic data
+```bash
+# 1. Generate synthetic data
 python ingestion/simulate_ad_data.py
-# Output: data/raw/meta_ads_2024.csv, google_ads_2024.csv, tiktok_ads_2024.csv
+python ingestion/simulate_feedback_data.py
 
-# 6. Load to Snowflake
-python ingestion/load_to_snowflake.py --truncate
-# Expected: ~7,320 rows across 3 tables
+# 2. Load Bronze (DuckDB)
+python ingestion/load_to_warehouse.py --truncate
 
-# 7. Run dbt
+# 3. Enrich feedback — offline (replays the committed fixture, no API key)
+python enrichment/enrich_feedback.py --offline
+
+# 4. Build + test everything
 cd dbt
-dbt deps                          # install dbt_utils and dbt_expectations
-dbt run --select staging          # build Silver views
-dbt run --select marts            # build Gold tables
-dbt test                          # run all 43 tests
-dbt docs generate && dbt docs serve  # browse docs at localhost:8080
+dbt deps
+dbt build --profiles-dir . --target dev      # models, snapshot, all tests
+dbt docs generate --profiles-dir . && dbt docs serve
+
+# 5. (Optional) export marts for Power BI
+cd ..
+python dashboard/export_marts.py
 ```
 
-### Environment Variables
+### Live enrichment (optional)
 
+```bash
+# Requires GOOGLE_AI_STUDIO_API_KEY in your environment or .env
+python enrichment/enrich_feedback.py --model gemini-2.5-flash --batch-size 120
 ```
-SNOWFLAKE_ACCOUNT=<account-identifier>
-SNOWFLAKE_USER=MARKETING_PIPELINE_USER
-SNOWFLAKE_PASSWORD=<your-password>
-SNOWFLAKE_DATABASE=MARKETING_ANALYTICS
-SNOWFLAKE_SCHEMA=RAW
-SNOWFLAKE_WAREHOUSE=MARKETING_WH
+
+### Deploy to Snowflake (optional prod target)
+
+```bash
+# Run snowflake/setup.sql once, set SNOWFLAKE_* env vars, then:
+python ingestion/load_to_warehouse.py --target snowflake --truncate
+cd dbt && dbt build --profiles-dir . --target prod
 ```
 
 ---
@@ -205,63 +248,29 @@ SNOWFLAKE_WAREHOUSE=MARKETING_WH
 
 ```
 marketing-analytics-pipeline/
-├── .env.example
-├── .github/
-│   └── workflows/
-│       ├── ci.yml                        # PR: dbt compile + dbt test --select staging
-│       ├── deploy.yml                    # main push: dbt run + test + docs to Pages
-│       └── README.md
-├── airflow/
-│   ├── README.md
-│   └── dags/
-│       └── marketing_pipeline_dag.py     # Daily DAG: simulate → load → dbt → notify
+├── AGENTIC.md                       # how this was built; design ownership
+├── requirements.txt
+├── .github/workflows/
+│   ├── ci.yml                       # PR: full keyless DuckDB pipeline + tests
+│   ├── deploy.yml                   # main: build + dbt docs to Pages
+│   └── live-enrichment.yml          # manual: live Gemini run, refresh fixture
+├── airflow/dags/marketing_pipeline_dag.py
 ├── dashboard/
-│   ├── marketing_analytics_dashboard.pbix
-│   └── screenshots/
-│       ├── page1_executive_summary.png
-│       ├── page2_channel_performance.png
-│       └── page3_campaign_detail.png
-├── data/
-│   └── raw/
-│       ├── meta_ads_2024.csv             # 2,928 rows
-│       ├── google_ads_2024.csv           # 2,562 rows
-│       └── tiktok_ads_2024.csv           # 1,830 rows
+│   ├── export_marts.py              # Gold marts -> Parquet for Power BI
+│   ├── README.md
+│   └── marketing_analytics_dashboard.pbix
+├── data/raw/                        # generated CSVs (ads + feedback)
 ├── dbt/
-│   ├── dbt_project.yml
-│   ├── packages.yml                      # dbt_utils + dbt_expectations
-│   ├── profiles.yml
-│   ├── macros/
-│   │   └── generate_schema_name.sql
-│   └── models/
-│       ├── staging/
-│       │   ├── sources.yml
-│       │   ├── schema.yml
-│       │   ├── stg_meta_ads.sql
-│       │   ├── stg_google_ads.sql
-│       │   └── stg_tiktok_ads.sql
-│       └── marts/
-│           ├── schema.yml
-│           ├── fct_ad_spend.sql
-│           ├── fct_channel_daily.sql
-│           ├── fct_campaign_summary.sql
-│           └── dim_campaigns.sql
+│   ├── models/staging/              # stg ads + stg_customer_feedback + stg_feedback_enriched
+│   ├── models/marts/                # ad marts + fct_feedback / themes / campaign_performance
+│   ├── snapshots/                   # feedback_enrichment_snapshot
+│   └── tests/                       # assert_resolution_precision.sql
+├── enrichment/
+│   ├── enrich_feedback.py           # Gemini enrichment engine
+│   └── fixtures/                    # committed enrichment fixture (keyless CI)
 ├── ingestion/
 │   ├── simulate_ad_data.py
-│   └── load_to_snowflake.py
-└── snowflake/
-    └── setup.sql
+│   ├── simulate_feedback_data.py
+│   └── load_to_warehouse.py         # DuckDB (default) or Snowflake
+└── snowflake/setup.sql              # prod warehouse + table DDL
 ```
-
----
-
-## GitHub Actions Secrets Required
-
-Set these under **Settings → Secrets and variables → Actions**:
-
-| Secret | Value |
-|---|---|
-| `SNOWFLAKE_ACCOUNT` | Your account identifier (e.g. `yudbpja-bp81892`) |
-| `SNOWFLAKE_USER` | `MARKETING_PIPELINE_USER` |
-| `SNOWFLAKE_PASSWORD` | Password set in `snowflake/setup.sql` |
-
-GitHub Pages must be enabled under **Settings → Pages → Source → GitHub Actions**.

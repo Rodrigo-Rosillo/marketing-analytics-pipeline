@@ -1,0 +1,47 @@
+version: 2
+
+models:
+  - name: stg_customer_feedback
+    description: Cleaned customer feedback — normalized channel, parsed dates, numeric rating.
+    columns:
+      - name: feedback_id
+        tests: [not_null, unique]
+      - name: source_channel
+        description: Inconsistent source labels normalized to a channel.
+        tests:
+          - accepted_values:
+              values: ['meta', 'google_ads', 'tiktok', 'other']
+      - name: rating_value
+        description: 1-5 rating extracted from mixed formats; null when absent.
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 1
+              max_value: 5
+              row_condition: "rating_value is not null"
+
+  - name: stg_feedback_enriched
+    description: Typed LLM enrichment output. Tests guard the non-deterministic fields.
+    columns:
+      - name: feedback_id
+        tests: [not_null, unique]
+      - name: sentiment
+        description: LLM sentiment label — must stay inside the controlled set.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['positive', 'negative', 'neutral', 'mixed']
+      - name: sentiment_confidence
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 1
+      - name: resolution_confidence
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 1
+      - name: language
+        tests:
+          - dbt_expectations.expect_column_value_lengths_to_be_between:
+              min_value: 2
+              max_value: 12

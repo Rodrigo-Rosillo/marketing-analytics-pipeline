@@ -50,9 +50,10 @@ DEFAULT_DUCKDB_PATH = PROJECT_ROOT / "MARKETING_ANALYTICS.duckdb"
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "feedback_enrichment.jsonl"
 
 API_KEY_ENV = "GOOGLE_AI_STUDIO_API_KEY"
-# gemini-2.5-flash-lite has free-tier quota and supports structured output.
-# (gemini-2.0-flash is no longer free-tier eligible on this key as of 2026.)
-DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+# gemini-2.5-flash is the canonical model: it has free-tier quota, supports
+# structured output, and is what the committed fixture was built with. (Note:
+# gemini-2.0-flash is no longer free-tier eligible on this key as of 2026.)
+DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 # Controlled vocabularies — the enrichment is only valid if it stays inside these.
 SENTIMENTS = ["positive", "negative", "neutral", "mixed"]
@@ -428,19 +429,24 @@ def main() -> None:
         print(f"WARN: offline mode, {len(misses)} rows have no fixture entry; "
               "they will be written with a neutral fallback.")
 
-    # Assemble output rows from cache (+ fallback for any offline misses).
+    # Assemble output rows. Prefer an exact (hash, model) hit; otherwise fall back
+    # to any cached enrichment for the same text — this lets a fixture replay
+    # regardless of which --model flag is passed (e.g. offline CI), using the
+    # model_version that actually produced the record.
+    by_hash = {h: rec for (h, _mv), rec in cache.items()}
     out_rows = []
     fallback = 0
     for r in feedback:
-        rec = cache.get((r["content_hash"], model))
+        rec = cache.get((r["content_hash"], model)) or by_hash.get(r["content_hash"])
         if rec is None:
             fallback += 1
             rec = {"sentiment": "neutral", "sentiment_confidence": 0.0, "themes": ["other"],
                    "product_mentions": [], "competitor_mentions": [], "language": "und",
-                   "campaign_reference": "", "resolved_campaign_id": "", "resolution_confidence": 0.0}
+                   "campaign_reference": "", "resolved_campaign_id": "", "resolution_confidence": 0.0,
+                   "model_version": model}
         out_rows.append({
             "feedback_id": r["feedback_id"], "content_hash": r["content_hash"],
-            "model_version": model,
+            "model_version": rec.get("model_version", model),
             **{k: rec[k] for k in (
                 "sentiment", "sentiment_confidence", "themes", "product_mentions",
                 "competitor_mentions", "language", "campaign_reference",
