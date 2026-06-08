@@ -32,8 +32,6 @@ LLM-enriched feedback: sentiment volume, monthly sentiment trend, theme breakdow
 and sentiment by campaign reference (the LLM-resolved free-text mentions).
 ![Voice of Customer](dashboard/screenshots/page4_voc.png)
 
-[Download .pbix](dashboard/marketing_analytics_dashboard.pbix)
-
 ---
 
 ## Architecture
