@@ -15,7 +15,8 @@ Runs on **DuckDB** locally and in CI (free, no secrets), and deploys to
 
 Power BI report built on the Gold layer, served via Parquet exports
 ([dashboard/README.md](dashboard/README.md)). Slicers for date range, channel, and
-campaign filter all pages.
+campaign filter the ad-performance pages; the Voice of Customer page adds campaign
+reference and sentiment slicers.
 
 ### Executive Summary
 ![Executive Summary](dashboard/screenshots/page1_executive_summary.png)
@@ -26,12 +27,12 @@ campaign filter all pages.
 ### Campaign Detail
 ![Campaign Detail](dashboard/screenshots/page3_campaign_detail.png)
 
-[Download .pbix](dashboard/marketing_analytics_dashboard.pbix)
+### Voice of Customer
+LLM-enriched feedback: sentiment volume, monthly sentiment trend, theme breakdown,
+and sentiment by campaign reference (the LLM-resolved free-text mentions).
+![Voice of Customer](dashboard/screenshots/page4_voc.png)
 
-> **Note:** The dashboard currently covers ad performance only (Executive
-> Summary, Channel Performance, Campaign Detail). A Voice-of-Customer page —
-> showing sentiment trends, theme breakdown, and campaign-level feedback
-> scores on the enriched feedback — is in progress.
+[Download .pbix](dashboard/marketing_analytics_dashboard.pbix)
 
 ---
 

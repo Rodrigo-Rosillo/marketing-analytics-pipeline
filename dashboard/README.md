@@ -27,21 +27,23 @@ individual file.
 | `fct_feedback_themes.parquet` | feedback × theme | Theme frequency |
 | `fct_campaign_performance.parquet` | campaign | **Spend + ROAS joined to sentiment** |
 
-## Suggested "Voice of Customer" page
+## Voice of Customer page
 
-Built on `fct_campaign_performance`, `fct_feedback`, and `fct_feedback_themes`:
+Built on `fct_feedback` and `fct_feedback_themes`:
 
-- **Spend vs. net sentiment** scatter — `total_spend` (x) vs `net_sentiment_score`
-  (y), bubble size = `feedback_count`, color = `channel`. Surfaces campaigns that
-  cost a lot *and* draw negative sentiment (e.g. the low-ROAS TikTok awareness
-  campaign).
-- **Sentiment mix by campaign** — 100% stacked bar of positive / negative /
-  neutral / mixed counts.
-- **Top themes** — bar chart of `theme` frequency from `fct_feedback_themes`,
-  sliceable by campaign and sentiment.
-- **Language split** and **resolution confidence** cards from `fct_feedback`.
-- A KPI card noting the share of feedback the model could resolve to a campaign,
-  with average `resolution_confidence`.
+- **KPI cards** — total feedback, positive %, negative %, average sentiment
+  confidence, and average sentiment score (net polarity on a −1…+1 scale).
+- **Feedback volume by sentiment** — bar chart of positive / negative / neutral /
+  mixed counts.
+- **Sentiment trend by month** — line chart of feedback volume per sentiment over
+  the year.
+- **Sentiment by theme** — 100% stacked bar of `theme` frequency from
+  `fct_feedback_themes`, split by sentiment (uses a bidirectional cross-filter so
+  the bridge table filters the feedback measure).
+- **Sentiment by campaign reference** — stacked bar of the LLM-resolved free-text
+  mentions (e.g. *"the dynamic ad on tiktok"*) split by sentiment.
+
+Slicers: campaign reference (search), sentiment, channel, campaign, and date range.
 
 > The feedback data is synthetic and labeled as such; sentiment, themes, and
 > campaign attribution are produced by an LLM (Gemini) — see the project README
